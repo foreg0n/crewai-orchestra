@@ -1,9 +1,9 @@
 # CrewAI Orchestra + LLM Resource Manager
 
-Мультиагентный AI-оркестр с автоматическим управлением облачными провайдерами,
-fallback-цепочками и ротацией API-ключей. Интегрируется с Odysseus (self-hosted AI workspace).
+A multi-agent AI orchestra with automated management of cloud providers,
+fallback chains, and API key rotation. Integrates with Odysseus (a self-deployable AI runtime).
 
-## Архитектура
+## Architecture
 
 ```
 Odysseus UI
@@ -15,9 +15,9 @@ LLM Resource Manager
  Groq   OpenRouter  Cerebras  Gemini
 ```
 
-### Роли агентов
+### Agent Roles
 
-| Роль | Провайдер | Модель | Fallback |
+| Role | Provider | Model | Fallback |
 |------|-----------|--------|----------|
 | CODE_TASK | OpenRouter | Qwen3-Coder-480B | Groq GPT-OSS-120B |
 | ANALYSIS_TASK | Cerebras | DeepSeek-R1 | OpenRouter DeepSeek-R1 |
@@ -25,49 +25,49 @@ LLM Resource Manager
 | SUMMARY_TASK | Cerebras | Llama-3.3-70B | Groq GPT-OSS-20B |
 | SIMPLE_CHAT | Cerebras | Llama-3.3-70B | Gemini Flash |
 
-### Возможности LRM
+### LRM Features
 
-- Автоматический выбор провайдера и ключа
-- Cooldown при 429 ошибках с авто-восстановлением
-- Fallback chain — при недоступности провайдера переключается на следующий
-- Метрики использования по каждому провайдеру
-- Поддержка нескольких ключей одного провайдера
+- Automatic selection of provider and key
+- Cooldown after 429 errors with automatic recovery
+- Fallback chain—switches to the next provider if a provider is unavailable
+- Usage metrics for each provider
+- Support for multiple keys from a single provider
 
-## Установка
+## Installation
 
-### 1. Требования
+### 1. Requirements
 
 - Python 3.11
 - Docker Desktop (для Odysseus)
 
-### 2. Клонировать репозиторий
+### 2. Clone a repository
 
 ```bash
-git clone https://github.com/ТВО_ИМЯ/crewai-orchestra.git
+git clone https://github.com/YOUR_NAME/crewai-orchestra.git
 cd crewai-orchestra
 ```
 
-### 3. Установить зависимости
+### 3. Set up dependencies
 
 ```bash
 # Windows (Python 3.11)
 C:\Users\USERNAME\AppData\Local\Programs\Python\Python311\python.exe -m pip install -r requirements.txt
 ```
 
-### 4. Настроить ключи
+### 4. Configure Keys
 
 ```bash
 cp .env.example .env
-# Открыть .env и вставить API ключи
+# Open the .env file and paste the API keys
 ```
 
-Где получить ключи:
+Where to pick up the keys:
 - **Groq**: https://console.groq.com → API Keys
-- **OpenRouter**: https://openrouter.ai → Keys (пополни на $10 для 1000 req/day)
+- **OpenRouter**: https://openrouter.ai → Keys (Top up by $10 for 1,000 requests per day)
 - **Cerebras**: https://cloud.cerebras.ai → API Keys
 - **Gemini**: https://aistudio.google.com → Get API Key
 
-### 5. Запустить
+### 5. Run
 
 ```bash
 # Windows
@@ -77,49 +77,37 @@ start.bat
 uvicorn main:app --host 0.0.0.0 --port 8181 --reload
 ```
 
-### 6. Проверить
+### 6. Check
 
 ```
 http://localhost:8181/health   → {"status": "ok"}
-http://localhost:8181/status   → статус всех ключей и метрики
+http://localhost:8181/status   → status of all keys and metrics
 http://localhost:8181/docs     → Swagger UI
 ```
 
-## Подключение к Odysseus
-
-В Odysseus → Settings → Add Provider:
-
-```
-Name:     CrewAI Orchestra
-Base URL: http://host.docker.internal:8181/v1
-API Key:  orchestra
-```
-
-Выбирай модель `orchestra` в чате — запросы автоматически маршрутизируются.
-
-## Структура проекта
+## Project Structure
 
 ```
 crewai-orchestra/
 ├── main.py                        # FastAPI сервер, CrewAI pipeline
-├── router.py                      # Классификация задач по типу
+├── router.py                      # Classification of Problems by Type
 ├── requirements.txt
-├── start.bat                      # Запуск на Windows
-├── .env.example                   # Шаблон переменных окружения
+├── start.bat                      # Running on Windows
+├── .env.example                   # Environment Variables Template
 ├── .gitignore
 └── llm_resource_manager/
     ├── __init__.py
-    ├── manager.py                 # Главный класс LRM, fallback chains
-    ├── scheduler.py               # Выбор провайдера и ключа
-    ├── providers.py               # Адаптеры: Groq, OpenRouter, Cerebras, Gemini
-    ├── cooldown.py                # Управление cooldown при 429
-    ├── metrics.py                 # Сбор метрик использования
-    └── storage.py                 # Хранение состояния ключей
+    ├── manager.py                 # LRM main class, fallback chains
+    ├── scheduler.py               # Choosing a Provider and a Key
+    ├── providers.py               # Adapters: Groq, OpenRouter, Cerebras, Gemini
+    ├── cooldown.py                # Cooldown Management at 429
+    ├── metrics.py                 # Collection of usage metrics
+    └── storage.py                 # Key State Storage
 ```
 
-## Добавление нового провайдера
+## Adding a New Provider
 
-1. Добавить класс в `llm_resource_manager/providers.py`:
+1. Add a class to `llm_resource_manager/providers.py`:
 
 ```python
 class NewProvider(BaseProvider):
@@ -133,7 +121,7 @@ class NewProvider(BaseProvider):
         }
 ```
 
-2. Зарегистрировать в `PROVIDER_CLASSES`:
+2. Register with `PROVIDER_CLASSES`:
 
 ```python
 PROVIDER_CLASSES = {
@@ -142,7 +130,7 @@ PROVIDER_CLASSES = {
 }
 ```
 
-3. Добавить ключ в `.env` и `main.py`:
+3. Add a key to `.env` и `main.py`:
 
 ```python
 lrm = LLMResourceManager(
@@ -153,8 +141,4 @@ lrm = LLMResourceManager(
 )
 ```
 
-4. Добавить модели в fallback chains в `manager.py`.
-
-## Лицензия
-
-MIT
+4. Add models to fallback chains in `manager.py`.
