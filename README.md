@@ -1,144 +1,180 @@
-# CrewAI Orchestra + LLM Resource Manager
+# crewai-orchestra
 
-A multi-agent AI orchestra with automated management of cloud providers,
-fallback chains, and API key rotation. Integrates with Odysseus (a self-deployable AI runtime).
+A FastAPI-based LLM orchestration system with a multi-stage **Execution Engine** that optimizes cost, context, and response quality across multiple cloud AI providers.
+
+---
 
 ## Architecture
 
-```
-Odysseus UI
-    ↓
-CrewAI Orchestra (FastAPI, port 8181)
-    ↓
-LLM Resource Manager
-    ↙        ↓         ↓        ↘
- Groq   OpenRouter  Cerebras  Gemini
-```
-
-### Agent Roles
-
-| Role | Provider | Model | Fallback |
-|------|-----------|--------|----------|
-| CODE_TASK | OpenRouter | Qwen3-Coder-480B | Groq GPT-OSS-120B |
-| ANALYSIS_TASK | Cerebras | DeepSeek-R1 | OpenRouter DeepSeek-R1 |
-| REVIEW_TASK | Groq | GPT-OSS-120B | Cerebras GPT-OSS-120B |
-| SUMMARY_TASK | Cerebras | Llama-3.3-70B | Groq GPT-OSS-20B |
-| SIMPLE_CHAT | Cerebras | Llama-3.3-70B | Gemini Flash |
-
-### LRM Features
-
-- Automatic selection of provider and key
-- Cooldown after 429 errors with automatic recovery
-- Fallback chain—switches to the next provider if a provider is unavailable
-- Usage metrics for each provider
-- Support for multiple keys from a single provider
-
-## Installation
-
-### 1. Requirements
-
-- Python 3.11
-- Docker Desktop (для Odysseus)
-
-### 2. Clone a repository
-
-```bash
-git clone https://github.com/YOUR_NAME/crewai-orchestra.git
-cd crewai-orchestra
-```
-
-### 3. Set up dependencies
-
-```bash
-# Windows (Python 3.11)
-C:\Users\USERNAME\AppData\Local\Programs\Python\Python311\python.exe -m pip install -r requirements.txt
-```
-
-### 4. Configure Keys
-
-```bash
-cp .env.example .env
-# Open the .env file and paste the API keys
-```
-
-Where to pick up the keys:
-- **Groq**: https://console.groq.com → API Keys
-- **OpenRouter**: https://openrouter.ai → Keys (Top up by $10 for 1,000 requests per day)
-- **Cerebras**: https://cloud.cerebras.ai → API Keys
-- **Gemini**: https://aistudio.google.com → Get API Key
-
-### 5. Run
-
-```bash
-# Windows
-start.bat
-
-# Linux / Mac
-uvicorn main:app --host 0.0.0.0 --port 8181 --reload
-```
-
-### 6. Check
+Every request passes through a sequential pipeline before reaching an LLM provider:
 
 ```
-http://localhost:8181/health   → {"status": "ok"}
-http://localhost:8181/status   → status of all keys and metrics
-http://localhost:8181/docs     → Swagger UI
+Request
+  │
+  ├─► Cache (SQLite)                if HIT → instant response
+  │
+  ├─► Language Middleware           detect language, build instruction
+  │
+  ├─► Cost Optimizer                score complexity → select model tier
+  │
+  ├─► BudgetManager                 trim history to fit context window
+  │
+  ├─► Dynamic Prompt Builder        assemble system prompt from modules
+  │
+  └─► LRM → Provider → Response
 ```
+
+For `expert`-level tasks the request goes through a **CrewAI pipeline** (Analyst → Developer → Reviewer) instead of a single LLM call.
+
+---
+
+## Execution Engine
+
+### Stage 1 — BudgetManager
+Counts tokens precisely via `tiktoken` and trims conversation history using a sliding window (newest messages kept first). Allocates token budgets per section based on task type.
+
+### Stage 2 — Dynamic Prompt Builder
+Assembles the system prompt on the fly from independent modules (`safety`, `language`, `code`, `analysis`, `summary`, `simple_chat`). No more one giant static prompt — only relevant modules are included per task.
+
+### Stage 3 — Cost Optimizer
+Replaces the static regex router. Scores request complexity (0.0–1.0) across five signals: message length, high-complexity keywords, code patterns, trivial/greeting patterns, and conversation depth. Maps the score to the cheapest sufficient model.
+
+| Complexity | Label | Provider | Model |
+|---|---|---|---|
+| 0.00–0.20 | trivial | Cerebras | Llama 3.3 70B |
+| 0.21–0.45 | simple | Gemini | Gemini 2.0 Flash |
+| 0.46–0.70 | medium | Groq | GPT-OSS 120B |
+| 0.71–0.90 | complex | OpenRouter | DeepSeek R1 |
+| 0.91–1.00 | expert | OpenRouter | Qwen3-Coder 480B |
+
+### Stage 4 — Language Middleware
+Detects the user's language via `lingua` (with a Cyrillic-ratio fallback). Caches the detected language per session. Injects a language instruction into the system prompt and retries with progressively stronger wording if the model responds in the wrong language (up to 3 attempts).
+
+### Stage 5 — Cache
+SHA-256 hashes the normalized request and stores LLM responses in SQLite. Cache is checked first — on a hit, all other stages are skipped entirely. TTL varies by task type; `ANALYSIS_TASK` is never cached.
+
+| Task type | TTL |
+|---|---|
+| SIMPLE_CHAT | 24 hours |
+| SUMMARY_TASK | 6 hours |
+| CODE_TASK | 2 hours |
+| REVIEW_TASK | 1 hour |
+| ANALYSIS_TASK | not cached |
+
+---
+
+## LRM — LLM Resource Manager
+
+Handles provider fallback chains, API key rotation, 429 cooldown management, per-provider metrics, and weighted scheduling.
+
+**Routing table:**
+
+| Task type | Primary | Fallback 1 |
+|---|---|---|
+| CODE_TASK | OpenRouter Qwen3-Coder | Groq GPT-OSS-120B |
+| ANALYSIS_TASK | Cerebras DeepSeek-R1 | OpenRouter DeepSeek-R1 |
+| REVIEW_TASK | Groq GPT-OSS-120B | Cerebras GPT-OSS-120B |
+| SUMMARY_TASK | Cerebras Llama-3.3-70B | Groq GPT-OSS-20B |
+| SIMPLE_CHAT | Cerebras Llama-3.3-70B | Gemini Flash |
+
+---
 
 ## Project Structure
 
 ```
 crewai-orchestra/
-├── main.py                        # FastAPI сервер, CrewAI pipeline
-├── router.py                      # Classification of Problems by Type
+├── main.py                        # FastAPI app, request pipeline
 ├── requirements.txt
-├── start.bat                      # Running on Windows
-├── .env.example                   # Environment Variables Template
-├── .gitignore
+├── start.bat                      # Windows quick start
+├── .env                           # API keys (not committed)
+│
+├── execution_engine/
+│   ├── __init__.py
+│   ├── context.py                 # ExecutionContext dataclass
+│   ├── budget_manager.py          # Stage 1 — token budgeting
+│   ├── prompt_builder.py          # Stage 2 — dynamic prompt assembly
+│   ├── cost_optimizer.py          # Stage 3 — complexity scoring & routing
+│   ├── language_middleware.py     # Stage 4 — language detection & retry
+│   └── cache.py                   # Stage 5 — SQLite response cache
+│
 └── llm_resource_manager/
-    ├── __init__.py
-    ├── manager.py                 # LRM main class, fallback chains
-    ├── scheduler.py               # Choosing a Provider and a Key
-    ├── providers.py               # Adapters: Groq, OpenRouter, Cerebras, Gemini
-    ├── cooldown.py                # Cooldown Management at 429
-    ├── metrics.py                 # Collection of usage metrics
-    └── storage.py                 # Key State Storage
+    ├── manager.py                 # LRM core
+    ├── scheduler.py               # Provider/key selection
+    ├── providers.py               # Groq, OpenRouter, Cerebras, Gemini adapters
+    ├── cooldown.py                # 429 cooldown tracking
+    ├── metrics.py                 # Per-provider usage metrics
+    └── storage.py                 # Key state storage
 ```
 
-## Adding a New Provider
+---
 
-1. Add a class to `llm_resource_manager/providers.py`:
+## Installation
 
-```python
-class NewProvider(BaseProvider):
-    name     = "newprovider"
-    base_url = "https://api.newprovider.com/v1"
+```bash
+git clone https://github.com/foreg0n/crewai-orchestra
+cd crewai-orchestra
 
-    def get_headers(self) -> dict:
-        return {
-            "Content-Type":  "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
+python -m venv venv
+venv\Scripts\activate        # Windows
+# source venv/bin/activate   # Linux / macOS
+
+pip install -r requirements.txt
 ```
 
-2. Register with `PROVIDER_CLASSES`:
+---
 
-```python
-PROVIDER_CLASSES = {
-    ...
-    "newprovider": NewProvider,
-}
+## Configuration
+
+Create a `.env` file in the project root:
+
+```env
+GROQ_API_KEY=gsk_...
+OPENROUTER_API_KEY=sk-or-...
+CEREBRAS_API_KEY=csk-...
+GEMINI_API_KEY=AIza...
 ```
 
-3. Add a key to `.env` и `main.py`:
+Providers with missing keys are automatically skipped — the system continues with whatever keys are available.
 
-```python
-lrm = LLMResourceManager(
-    provider_keys={
-        ...
-        "newprovider": [os.getenv("NEWPROVIDER_API_KEY")],
-    }
-)
+---
+
+## Running
+
+```bash
+# Windows
+start.bat
+
+# Manual
+uvicorn main:app --host 0.0.0.0 --port 8181 --reload
 ```
 
-4. Add models to fallback chains in `manager.py`.
+---
+
+## API
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/v1/chat/completions` | OpenAI-compatible chat endpoint |
+| GET | `/v1/models` | List available models |
+| GET | `/health` | Health check |
+| GET | `/status` | LRM metrics + cache statistics |
+
+The `/v1/chat/completions` endpoint is fully compatible with the OpenAI API format, so any client that supports OpenAI (Open WebUI, Odysseus, etc.) works out of the box.
+
+**Example request:**
+
+```bash
+curl http://localhost:8181/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{"role": "user", "content": "привет"}],
+    "stream": false
+  }'
+```
+
+---
+
+## Requirements
+
+- Python 3.11+
+- API keys for at least one provider (Groq, OpenRouter, Cerebras, or Gemini)
